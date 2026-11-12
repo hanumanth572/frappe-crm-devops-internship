@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frappe-crm
+  namespace: frappe-crm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frappe-crm
+  template:
+    metadata:
+      labels:
+        app: frappe-crm
+    spec:
+      initContainers:
+        - name: prepare-nginx-assets
+          image: ghcr.io/frappe/crm:latest
+          command:
+            - bash
+            - -lc
+            - |
+              set -e
+              mkdir -p /shared/frappe /shared/crm
+              cp -a /home/frappe/frappe-bench/apps/frappe/frappe/public/. /shared/frappe/
+              cp -a /home/frappe/frappe-bench/apps/crm/crm/public/. /shared/crm/
+          volumeMounts:
+            - name: nginx-assets
+              mountPath: /shared
+
+      containers:
+        - name: frappe-crm
+          image: ghcr.io/frappe/crm:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: frappe-sites
+              mountPath: /home/frappe/frappe-bench/sites
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 20
+
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - name: nginx-http
+              containerPort: 8080
+          volumeMounts:
+            - name: nginx-assets
+              mountPath: /usr/share/nginx/html/assets
+              readOnly: true
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /assets/frappe/dist/css/login.bundle.N4HSW3R6.css
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+      volumes:
+        - name: frappe-sites
+          persistentVolumeClaim:
+            claimName: frappe-sites
+        - name: nginx-assets
+          emptyDir: {}
+        - name: nginx-config
+          configMap:
+            name: frappe-nginx-config

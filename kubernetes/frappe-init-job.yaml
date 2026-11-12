@@ -1,0 +1,89 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: frappe-site-init
+  namespace: frappe-crm
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+
+      initContainers:
+        - name: prepare-sites
+          image: ghcr.io/frappe/crm:latest
+          command:
+            - bash
+            - -lc
+            - |
+              if [ ! -f /sites/apps.txt ]; then
+                cp -a /home/frappe/frappe-bench/sites/. /sites/
+              fi
+              chown -R 1000:1000 /sites
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: frappe-sites
+              mountPath: /sites
+
+      containers:
+        - name: initialize-site
+          image: ghcr.io/frappe/crm:latest
+          workingDir: /home/frappe/frappe-bench
+          command:
+            - bash
+            - -lc
+            - |
+              set -e
+
+              bench set-config -g db_host "$DB_HOST"
+              bench set-config -g db_port "$DB_PORT"
+              bench set-config -g redis_cache "redis://$REDIS_HOST:6379"
+              bench set-config -g redis_queue "redis://$REDIS_HOST:6379"
+              bench set-config -g redis_socketio "redis://$REDIS_HOST:6379"
+
+              if [ ! -d sites/crm.localhost ]; then
+                bench new-site crm.localhost \
+                  --db-host "$DB_HOST" \
+                  --db-port "$DB_PORT" \
+                  --mariadb-root-password "$DB_ROOT_PASSWORD" \
+                  --admin-password "$ADMIN_PASSWORD" \
+                  --no-mariadb-socket \
+                  --install-app crm
+              else
+                echo "CRM site already exists; skipping initialization."
+              fi
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: frappe-config
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: frappe-config
+                  key: DB_PORT
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: frappe-config
+                  key: REDIS_HOST
+            - name: DB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: frappe-db-secret
+                  key: DB_PASSWORD
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: frappe-admin-secret
+                  key: ADMIN_PASSWORD
+          volumeMounts:
+            - name: frappe-sites
+              mountPath: /home/frappe/frappe-bench/sites
+
+      volumes:
+        - name: frappe-sites
+          persistentVolumeClaim:
+            claimName: frappe-sites
